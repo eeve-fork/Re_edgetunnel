@@ -4,18 +4,26 @@ import { handleLogin, checkAuth, handleLogout } from './controllers/auth.js';
 import { handleAdmin } from './controllers/admin.js';
 import { handleSub } from './controllers/sub.js';
 import { handleWSRequest } from './core/proxy.js';
-import { MD5MD5, uuidRegex } from './utils/helpers.js';
+import { MD5MD5, parseUuidCredential, uuidRegex } from './utils/helpers.js';
 import { nginx, html1101, fetchMasquerade } from './utils/pages.js';
 import { parseConcurrentDialCount } from './core/dialer.js';
 import { parseSpeedTestDomains, parseSpeedTestMode } from './core/speedtest.js';
 import { handleGrpcRequest, handleXHttpRequest } from './core/http-tunnel.js';
 import { parseUpstreamProxy } from './protocols/upstream.js';
+import { looksLikeGrpcPayload } from './protocols/grpc.js';
 
 export default {
     async fetch(request, env, ctx) {
         const url = new URL(request.url);
         const upgradeHeader = request.headers.get('Upgrade');
-        const adminPassword = env.ADMIN || env.admin || env.PASSWORD || env.password || env.pswd || env.TOKEN || env.KEY || env.UUID || env.uuid;
+        const rawEnvUUID = env.UUID || env.uuid || '';
+        let envUUID = '';
+        try {
+            envUUID = parseUuidCredential(rawEnvUUID);
+        } catch (error) {
+            return new Response(error.message, { status: 503 });
+        }
+        const adminPassword = env.ADMIN || env.admin || env.PASSWORD || env.password || env.pswd || env.TOKEN || env.KEY || envUUID;
         const secretKey = env.KEY || '勿动此默认密钥，有需求请自行通过添加变量KEY进行修改';
 
         let userIDMD5 = '';
@@ -23,8 +31,7 @@ export default {
             userIDMD5 = await MD5MD5(adminPassword + secretKey);
         } catch (e) { userIDMD5 = '00000000-0000-0000-0000-000000000000'; }
 
-        const envUUID = env.UUID || env.uuid;
-        const userID = (envUUID && uuidRegex.test(envUUID)) ? envUUID.toLowerCase() : [userIDMD5.slice(0, 8), userIDMD5.slice(8, 12), '4' + userIDMD5.slice(13, 16), '8' + userIDMD5.slice(17, 20), userIDMD5.slice(20)].join('-');
+        const userID = envUUID || [userIDMD5.slice(0, 8), userIDMD5.slice(8, 12), '4' + userIDMD5.slice(13, 16), '8' + userIDMD5.slice(17, 20), userIDMD5.slice(20)].join('-');
 
         const accessIP = request.headers.get('X-Real-IP') || request.headers.get('CF-Connecting-IP') || 'Unknown';
         const path = url.pathname.slice(1);
@@ -75,15 +82,15 @@ export default {
         if (!adminPassword) return new Response('Administrator password is not configured.', { status: 503 });
 
         const contentType = request.headers.get('content-type')?.toLowerCase() || '';
-        const isReservedHttpRoute = pathLower === 'login' || pathLower === 'sub' || pathLower.startsWith('admin/');
-        if (request.method === 'POST' && !isReservedHttpRoute) {
-            if (contentType.startsWith('application/grpc')) {
-                return handleGrpcRequest(request, userID, createProxyConfig());
-            }
-            const referer = request.headers.get('referer') || '';
-            if (contentType.startsWith('application/octet-stream') || referer.includes('x_padding=')) {
+        const referer = request.headers.get('referer') || '';
+        if (request.method === 'POST' && contentType.startsWith('application/octet-stream')) {
+            return handleXHttpRequest(request, userID, createProxyConfig());
+        }
+        if (request.method === 'POST' && contentType.startsWith('application/grpc')) {
+            if (referer.includes('x_padding=') || !await looksLikeGrpcPayload(request)) {
                 return handleXHttpRequest(request, userID, createProxyConfig());
             }
+            return handleGrpcRequest(request, userID, createProxyConfig());
         }
 
         if (env.KV && typeof env.KV.get === 'function') {

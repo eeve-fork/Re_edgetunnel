@@ -1,6 +1,19 @@
 
 export const uuidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$/;
 
+export function normalizeUuidCredential(value) {
+    if (typeof value !== 'string') return '';
+    return value.trim().replace(/^\uFEFF+/, '').trim().toLowerCase();
+}
+
+export function parseUuidCredential(value) {
+    const normalized = normalizeUuidCredential(value);
+    if (value && !uuidRegex.test(normalized)) {
+        throw new TypeError('UUID must be a canonical version-4 UUID. Remove BOM and surrounding whitespace.');
+    }
+    return normalized;
+}
+
 function md5Hex(text) {
     const input = new TextEncoder().encode(text);
     const length = input.length;
@@ -125,7 +138,7 @@ export function buildShadowsocksUri({
         .replace(/\//g, '_')
         .replace(/=+$/, '');
     const pluginPath = `${path}${String(path).includes('?') ? '&' : '?'}enc=${encodeURIComponent(normalizedMethod)}`;
-    const plugin = `v2ray-plugin;mode=websocket;host=${host};path=${pluginPath}${tls ? ';tls' : ''}`;
+    const plugin = `v2ray-plugin;mode=websocket;host=${host};path=${pluginPath}${tls ? ';tls' : ''};mux=0`;
     const params = new URLSearchParams({ plugin });
     const formattedAddress = String(address).includes(':') && !String(address).startsWith('[')
         ? `[${address}]`

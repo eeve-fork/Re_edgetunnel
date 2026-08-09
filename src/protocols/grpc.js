@@ -1,5 +1,31 @@
 const MAX_GRPC_FRAME_BYTES = 1024 * 1024;
 
+export async function looksLikeGrpcPayload(request) {
+    try {
+        const clone = request.clone();
+        const reader = clone.body?.getReader();
+        if (!reader) return true;
+
+        let prefix = new Uint8Array(0);
+        while (prefix.byteLength < 6) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
+            const joined = new Uint8Array(prefix.byteLength + chunk.byteLength);
+            joined.set(prefix);
+            joined.set(chunk, prefix.byteLength);
+            prefix = joined;
+        }
+        try { void reader.cancel().catch(() => { }); } catch { }
+
+        if (prefix.byteLength < 6 || prefix[0] !== 0) return false;
+        const frameLength = new DataView(prefix.buffer, prefix.byteOffset, prefix.byteLength).getUint32(1);
+        return frameLength > 0 && frameLength <= MAX_GRPC_FRAME_BYTES && prefix[5] === 0x0a;
+    } catch {
+        return true;
+    }
+}
+
 function concatBytes(left, right) {
     const joined = new Uint8Array(left.byteLength + right.byteLength);
     joined.set(left);
